@@ -6,11 +6,6 @@ import { parse } from "./lcov"
 import { diff } from "./comment"
 
 async function main() {
-	if (!context.payload.pull_request) {
-		console.log("Only reporting coverage in pull requests, exiting...")
-		return
-	}
-
 	const token = core.getInput("github-token")
 	const lcovFile = core.getInput("lcov-file") || "./coverage/lcov.info"
 	const baseFile = core.getInput("lcov-base")
@@ -29,10 +24,16 @@ async function main() {
 
 	const options = {
 		repository: context.payload.repository.full_name,
-		commit: context.payload.pull_request.head.sha,
 		prefix: `${process.env.GITHUB_WORKSPACE}/`,
-		head: context.payload.pull_request.head.ref,
-		base: context.payload.pull_request.base.ref,
+	}
+
+	if (context.eventName === "pull_request") {
+		options.commit = context.payload.pull_request.head.sha
+		options.head = context.payload.pull_request.head.ref
+		options.base = context.payload.pull_request.base.ref
+	} else if (context.eventName === "push") {
+		options.commit = context.payload.after
+		options.head = context.ref
 	}
 
 	const lcov = await parse(raw)
@@ -41,30 +42,38 @@ async function main() {
 
 	const gh = new GitHub(token)
 
-	const comments = await gh.issues.listComments({
-		repo: context.repo.repo,
-		owner: context.repo.owner,
-		issue_number: context.payload.pull_request.number,
-	})
-
-	const botComment = comments.data.find(
-		({ user, body }) =>
-			user.id === 41898282 && body.startsWith("Coverage after merging"),
-	)
-
-	if (botComment) {
-		await new GitHub(token).issues.updateComment({
+	if (context.eventName === "pull_request") {
+		const comments = await gh.issues.listComments({
 			repo: context.repo.repo,
 			owner: context.repo.owner,
 			issue_number: context.payload.pull_request.number,
-			body,
-			comment_id: botComment.id,
 		})
-	} else {
-		await new GitHub(token).issues.createComment({
+
+		const botComment = comments.data.find(
+			({ user, body }) => user.id === 41898282 && body.startsWith("Coverage "),
+		)
+
+		if (botComment) {
+			gh.issues.updateComment({
+				repo: context.repo.repo,
+				owner: context.repo.owner,
+				issue_number: context.payload.pull_request.number,
+				body,
+				comment_id: botComment.id,
+			})
+		} else {
+			gh.issues.createComment({
+				repo: context.repo.repo,
+				owner: context.repo.owner,
+				issue_number: context.payload.pull_request.number,
+				body,
+			})
+		}
+	} else if (context.eventName === "push") {
+		gh.repos.createCommitComment({
 			repo: context.repo.repo,
 			owner: context.repo.owner,
-			issue_number: context.payload.pull_request.number,
+			commit_sha: options.commit,
 			body,
 		})
 	}

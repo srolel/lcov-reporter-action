@@ -22793,8 +22793,9 @@ const fragment = function(...children) {
 function tabulate(lcov, options) {
 	const head = tr(
 		th("File"),
+		th("Statements"),
 		th("Branches"),
-		th("Funcs"),
+		th("Functions"),
 		th("Lines"),
 		th("Uncovered Lines"),
 	);
@@ -22829,9 +22830,21 @@ function toFolder(path) {
 	return tr(td({ colspan: 5 }, b(path)))
 }
 
+function getStatement(file) {
+	const { branches, functions, lines } = file;
+	return [branches, functions, lines].reduce((prev, curr) => ({
+		hit: prev.hit + (curr.hit || 0),
+		found: prev.found + (curr.found || 0),
+	}), {
+		hit: 0,
+		found: 0,
+	})
+}
+
 function toRow(file, indent, options) {
 	return tr(
 		td(filename(file, indent, options)),
+		td(percentage$1(getStatement(file))),
 		td(percentage$1(file.branches)),
 		td(percentage$1(file.functions)),
 		td(percentage$1(file.lines)),
@@ -22883,7 +22896,9 @@ function uncovered(file, options) {
 
 function comment(lcov, options) {
 	return fragment(
-		`Coverage after merging ${b(options.head)} into ${b(options.base)}`,
+		options.base
+			? `Coverage after merging ${b(options.head)} into ${b(options.base)}`
+			: `Coverage for this commit`,
 		table(tbody(tr(th(percentage(lcov).toFixed(2), "%")))),
 		"\n\n",
 		details(summary("Coverage Report"), tabulate(lcov, options)),
@@ -22902,7 +22917,9 @@ function diff(lcov, before, options) {
 	const arrow = pdiff === 0 ? "" : pdiff < 0 ? "▾" : "▴";
 
 	return fragment(
-		`Coverage after merging ${b(options.head)} into ${b(options.base)}`,
+		options.base
+			? `Coverage after merging ${b(options.head)} into ${b(options.base)}`
+			: `Coverage for this commit`,
 		table(
 			tbody(
 				tr(
@@ -22917,11 +22934,6 @@ function diff(lcov, before, options) {
 }
 
 async function main$1() {
-	if (!github_1.payload.pull_request) {
-		console.log("Only reporting coverage in pull requests, exiting...");
-		return
-	}
-
 	const token = core$1.getInput("github-token");
 	const lcovFile = core$1.getInput("lcov-file") || "./coverage/lcov.info";
 	const baseFile = core$1.getInput("lcov-base");
@@ -22940,11 +22952,17 @@ async function main$1() {
 
 	const options = {
 		repository: github_1.payload.repository.full_name,
-		commit: github_1.payload.pull_request.head.sha,
 		prefix: `${process.env.GITHUB_WORKSPACE}/`,
-		head: github_1.payload.pull_request.head.ref,
-		base: github_1.payload.pull_request.base.ref,
 	};
+
+	if (github_1.eventName === "pull_request") {
+		options.commit = github_1.payload.pull_request.head.sha;
+		options.head = github_1.payload.pull_request.head.ref;
+		options.base = github_1.payload.pull_request.base.ref;
+	} else if (github_1.eventName === "push") {
+		options.commit = github_1.payload.after;
+		options.head = github_1.ref;
+	}
 
 	const lcov = await parse$2(raw);
 	const baselcov = baseRaw && (await parse$2(baseRaw));
@@ -22952,30 +22970,38 @@ async function main$1() {
 
 	const gh = new github_2(token);
 
-	const comments = await gh.issues.listComments({
-		repo: github_1.repo.repo,
-		owner: github_1.repo.owner,
-		issue_number: github_1.payload.pull_request.number,
-	});
-
-	const botComment = comments.data.find(
-		({ user, body }) =>
-			user.id === 41898282 && body.startsWith("Coverage after merging"),
-	);
-
-	if (botComment) {
-		await new github_2(token).issues.updateComment({
+	if (github_1.eventName === "pull_request") {
+		const comments = await gh.issues.listComments({
 			repo: github_1.repo.repo,
 			owner: github_1.repo.owner,
 			issue_number: github_1.payload.pull_request.number,
-			body,
-			comment_id: botComment.id,
 		});
-	} else {
-		await new github_2(token).issues.createComment({
+
+		const botComment = comments.data.find(
+			({ user, body }) => user.id === 41898282 && body.startsWith("Coverage "),
+		);
+
+		if (botComment) {
+			gh.issues.updateComment({
+				repo: github_1.repo.repo,
+				owner: github_1.repo.owner,
+				issue_number: github_1.payload.pull_request.number,
+				body,
+				comment_id: botComment.id,
+			});
+		} else {
+			gh.issues.createComment({
+				repo: github_1.repo.repo,
+				owner: github_1.repo.owner,
+				issue_number: github_1.payload.pull_request.number,
+				body,
+			});
+		}
+	} else if (github_1.eventName === "push") {
+		gh.repos.createCommitComment({
 			repo: github_1.repo.repo,
 			owner: github_1.repo.owner,
-			issue_number: github_1.payload.pull_request.number,
+			commit_sha: options.commit,
 			body,
 		});
 	}
