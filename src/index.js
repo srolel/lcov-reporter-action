@@ -21,7 +21,8 @@ async function main() {
 		return
 	}
 
-	const baseRaw = baseFile && await fs.readFile(baseFile, "utf-8").catch(err => null)
+	const baseRaw =
+		baseFile && (await fs.readFile(baseFile, "utf-8").catch(err => null))
 	if (baseFile && !baseRaw) {
 		console.log(`No coverage report found at '${baseFile}', ignoring...`)
 	}
@@ -35,15 +36,38 @@ async function main() {
 	}
 
 	const lcov = await parse(raw)
-	const baselcov = baseRaw && await parse(baseRaw)
+	const baselcov = baseRaw && (await parse(baseRaw))
 	const body = diff(lcov, baselcov, options)
 
-	await new GitHub(token).issues.createComment({
+	const gh = new GitHub(token)
+
+	const comments = await gh.issues.listComments({
 		repo: context.repo.repo,
 		owner: context.repo.owner,
 		issue_number: context.payload.pull_request.number,
-		body: diff(lcov, baselcov, options),
 	})
+
+	const botComment = comments.data.find(
+		({ user, body }) =>
+			user.id === 41898282 && body.startsWith("Coverage after merging"),
+	)
+
+	if (botComment) {
+		await new GitHub(token).issues.updateComment({
+			repo: context.repo.repo,
+			owner: context.repo.owner,
+			issue_number: context.payload.pull_request.number,
+			body,
+			comment_id: botComment.id,
+		})
+	} else {
+		await new GitHub(token).issues.createComment({
+			repo: context.repo.repo,
+			owner: context.repo.owner,
+			issue_number: context.payload.pull_request.number,
+			body,
+		})
+	}
 }
 
 main().catch(function(err) {
