@@ -22881,7 +22881,7 @@ function uncovered(file, options) {
 		.join(", ")
 }
 
-function comment (lcov, options) {
+function comment(lcov, options) {
 	return fragment(
 		`Coverage after merging ${b(options.head)} into ${b(options.base)}`,
 		table(tbody(tr(th(percentage(lcov).toFixed(2), "%")))),
@@ -22899,25 +22899,29 @@ function diff(lcov, before, options) {
 	const pafter = percentage(lcov);
 	const pdiff = pafter - pbefore;
 	const plus = pdiff > 0 ? "+" : "";
-	const arrow =
-		pdiff === 0
-			? ""
-			: pdiff < 0
-				? "▾"
-				: "▴";
+	const arrow = pdiff === 0 ? "" : pdiff < 0 ? "▾" : "▴";
 
 	return fragment(
 		`Coverage after merging ${b(options.head)} into ${b(options.base)}`,
-		table(tbody(tr(
-			th(pafter.toFixed(2), "%"),
-			th(arrow, " ", plus, pdiff.toFixed(2), "%"),
-		))),
+		table(
+			tbody(
+				tr(
+					th(pafter.toFixed(2), "%"),
+					th(arrow, " ", plus, pdiff.toFixed(2), "%"),
+				),
+			),
+		),
 		"\n\n",
 		details(summary("Coverage Report"), tabulate(lcov, options)),
 	)
 }
 
 async function main$1() {
+	if (!github_1.payload.pull_request) {
+		console.log("Only reporting coverage in pull requests, exiting...");
+		return
+	}
+
 	const token = core$1.getInput("github-token");
 	const lcovFile = core$1.getInput("lcov-file") || "./coverage/lcov.info";
 	const baseFile = core$1.getInput("lcov-base");
@@ -22928,7 +22932,8 @@ async function main$1() {
 		return
 	}
 
-	const baseRaw = baseFile && await fs.promises.readFile(baseFile, "utf-8").catch(err => null);
+	const baseRaw =
+		baseFile && (await fs.promises.readFile(baseFile, "utf-8").catch(err => null));
 	if (baseFile && !baseRaw) {
 		console.log(`No coverage report found at '${baseFile}', ignoring...`);
 	}
@@ -22942,15 +22947,38 @@ async function main$1() {
 	};
 
 	const lcov = await parse$2(raw);
-	const baselcov = baseRaw && await parse$2(baseRaw);
+	const baselcov = baseRaw && (await parse$2(baseRaw));
 	const body = diff(lcov, baselcov, options);
 
-	await new github_2(token).issues.createComment({
+	const gh = new github_2(token);
+
+	const comments = await gh.issues.listComments({
 		repo: github_1.repo.repo,
 		owner: github_1.repo.owner,
 		issue_number: github_1.payload.pull_request.number,
-		body: diff(lcov, baselcov, options),
 	});
+
+	const botComment = comments.data.find(
+		({ user, body }) =>
+			user.id === 41898282 && body.startsWith("Coverage after merging"),
+	);
+
+	if (botComment) {
+		await new github_2(token).issues.updateComment({
+			repo: github_1.repo.repo,
+			owner: github_1.repo.owner,
+			issue_number: github_1.payload.pull_request.number,
+			body,
+			comment_id: botComment.id,
+		});
+	} else {
+		await new github_2(token).issues.createComment({
+			repo: github_1.repo.repo,
+			owner: github_1.repo.owner,
+			issue_number: github_1.payload.pull_request.number,
+			body,
+		});
+	}
 }
 
 main$1().catch(function(err) {
